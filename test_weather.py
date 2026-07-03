@@ -175,13 +175,13 @@ class WeatherScriptTests(unittest.TestCase):
         output = weather.format_daily_summary(place, forecast, greeting="Доброе утро!")
 
         self.assertIn("Доброе утро!", output)
-        self.assertIn("Сегодня в Москва:", output)
-        self.assertIn("Сейчас: +12 °C, пасмурно", output)
-        self.assertIn("Ощущается как: +10 °C", output)
-        self.assertIn("Днем: от +8 °C до +17 °C", output)
-        self.assertIn("Осадки: вероятность до 60 %", output)
-        self.assertIn("Ветер: до 25 км/ч", output)
-        self.assertIn("Совет: лучше взять куртку и зонт.", output)
+        self.assertIn("📅 Сегодня в Москва:", output)
+        self.assertIn("🌤️ Сейчас: +12 °C, пасмурно", output)
+        self.assertIn("🤔 Ощущается как: +10 °C", output)
+        self.assertIn("🌡️ Днем: от +8 °C до +17 °C", output)
+        self.assertIn("☔ Осадки: вероятность до 60 %", output)
+        self.assertIn("💨 Ветер: до 25 км/ч", output)
+        self.assertIn("💡 Совет:", output)
 
     def test_format_daily_summary_skips_missing_optional_daily_fields(self):
         place = {"name": "Казань"}
@@ -196,11 +196,19 @@ class WeatherScriptTests(unittest.TestCase):
 
         output = weather.format_daily_summary(place, forecast, greeting="Добрый день!")
 
-        self.assertIn("Сегодня в Казань:", output)
+        self.assertIn("📅 Сегодня в Казань:", output)
         self.assertIn("Добрый день!", output)
-        self.assertIn("Сейчас: -2 °C, слабый снег", output)
+        self.assertIn("🌤️ Сейчас: -2 °C, слабый снег", output)
         self.assertNotIn("Осадки:", output)
         self.assertNotIn("Ветер:", output)
+
+    def test_build_daily_advice_varies_phrases_for_similar_weather(self):
+        first_advice = weather.build_daily_advice(8, 17, 60, 25)
+        second_advice = weather.build_daily_advice(8, 17, 61, 25)
+
+        self.assertNotEqual(first_advice, second_advice)
+        self.assertIn("зонт", first_advice)
+        self.assertIn("зонт", second_advice)
 
     def test_get_time_based_greeting_uses_request_hour(self):
         cases = [

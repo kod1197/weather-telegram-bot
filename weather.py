@@ -230,7 +230,7 @@ def format_daily_summary(
     lines = [
         greeting,
         "",
-        f"Сегодня в {city}:",
+        f"📅 Сегодня в {city}:",
     ]
 
     current_temp = current.get("temperature_2m")
@@ -239,16 +239,16 @@ def format_daily_summary(
         current_units.get("temperature_2m", "°C"),
     )
     if current_temp_text:
-        lines.append(f"Сейчас: {current_temp_text}, {description}")
+        lines.append(f"🌤️ Сейчас: {current_temp_text}, {description}")
     else:
-        lines.append(f"Сейчас: {description}")
+        lines.append(f"🌤️ Сейчас: {description}")
 
     apparent_temp_text = format_temperature(
         current.get("apparent_temperature"),
         current_units.get("apparent_temperature", "°C"),
     )
     if apparent_temp_text:
-        lines.append(f"Ощущается как: {apparent_temp_text}")
+        lines.append(f"🤔 Ощущается как: {apparent_temp_text}")
 
     min_temp = get_daily_value(daily, "temperature_2m_min")
     max_temp = get_daily_value(daily, "temperature_2m_max")
@@ -261,7 +261,7 @@ def format_daily_summary(
         daily_units.get("temperature_2m_max", "°C"),
     )
     if min_temp_text and max_temp_text:
-        lines.append(f"Днем: от {min_temp_text} до {max_temp_text}")
+        lines.append(f"🌡️ Днем: от {min_temp_text} до {max_temp_text}")
 
     precipitation = get_daily_value(daily, "precipitation_probability_max")
     precipitation_text = format_plain_value(
@@ -269,14 +269,14 @@ def format_daily_summary(
         daily_units.get("precipitation_probability_max", "%"),
     )
     if precipitation_text:
-        lines.append(f"Осадки: вероятность до {precipitation_text}")
+        lines.append(f"☔ Осадки: вероятность до {precipitation_text}")
 
     wind = get_daily_value(daily, "wind_speed_10m_max")
     wind_text = format_plain_value(wind, daily_units.get("wind_speed_10m_max", "км/ч"))
     if wind_text:
-        lines.append(f"Ветер: до {wind_text}")
+        lines.append(f"💨 Ветер: до {wind_text}")
 
-    lines.extend(["", f"Совет: {build_daily_advice(min_temp, max_temp, precipitation, wind)}"])
+    lines.extend(["", f"💡 Совет: {build_daily_advice(min_temp, max_temp, precipitation, wind)}"])
     return "\n".join(lines)
 
 
@@ -322,20 +322,109 @@ def build_daily_advice(
     windy = isinstance(max_wind, (int, float)) and max_wind >= 25
 
     if rainy and cold:
-        return "лучше взять куртку и зонт."
+        return choose_advice_phrase(
+            [
+                "лучше взять куртку и зонт.",
+                "накиньте что-то теплое и держите зонт под рукой.",
+                "куртка и зонт сегодня выглядят хорошей идеей.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if rainy:
-        return "зонт сегодня пригодится."
+        return choose_advice_phrase(
+            [
+                "зонт сегодня пригодится.",
+                "держите под рукой зонт или дождевик.",
+                "лучше заложить запас времени на дождь.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if very_cold:
-        return "оденьтесь теплее."
+        return choose_advice_phrase(
+            [
+                "оденьтесь теплее.",
+                "лучше выбрать самый теплый вариант одежды.",
+                "без теплого слоя сегодня будет неуютно.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if cold:
-        return "лучше взять куртку."
+        return choose_advice_phrase(
+            [
+                "лучше взять куртку.",
+                "легкая куртка или плотный слой не помешают.",
+                "на улице прохладно, одевайтесь чуть теплее.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if hot:
-        return "берите воду и избегайте перегрева."
+        return choose_advice_phrase(
+            [
+                "берите воду и избегайте перегрева.",
+                "сегодня пригодятся вода, тень и легкая одежда.",
+                "лучше не забывать про воду и защиту от солнца.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if windy:
-        return "ветрено, выбирайте одежду поплотнее."
+        return choose_advice_phrase(
+            [
+                "ветрено, выбирайте одежду поплотнее.",
+                "лучше закрепить капюшон и быть готовым к порывам ветра.",
+                "ветер может ощущаться сильнее температуры, одевайтесь устойчиво.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
     if isinstance(min_temp, (int, float)) and min_temp <= 10:
-        return "утром может быть прохладно, возьмите легкий слой."
-    return "день выглядит спокойным, одевайтесь по погоде."
+        return choose_advice_phrase(
+            [
+                "утром может быть прохладно, возьмите легкий слой.",
+                "на старт дня пригодится кофта или легкая куртка.",
+                "перепад температуры заметный, лучше одеться слоями.",
+            ],
+            min_temp,
+            max_temp,
+            precipitation_probability,
+            max_wind,
+        )
+    return choose_advice_phrase(
+        [
+            "день выглядит спокойным, одевайтесь по погоде.",
+            "погода без явных сюрпризов, можно планировать день спокойно.",
+            "особых погодных тревог нет, выбирайте комфортную одежду.",
+        ],
+        min_temp,
+        max_temp,
+        precipitation_probability,
+        max_wind,
+    )
+
+
+def choose_advice_phrase(phrases: list[str], *values: Any) -> str:
+    selector = 0
+    for value in values:
+        if isinstance(value, (int, float)):
+            selector += int(round(value * 10))
+
+    return phrases[selector % len(phrases)]
 
 
 def parse_args() -> argparse.Namespace:
