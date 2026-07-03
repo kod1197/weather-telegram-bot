@@ -177,28 +177,15 @@ def format_weather(place: dict[str, Any], weather: dict[str, Any]) -> str:
     return "\n".join(
         [
             f"Погода: {location}",
-            f"Время: {current.get('time', 'неизвестно')}",
             f"Сейчас: {description}",
-            (
-                "Температура: "
-                f"{current.get('temperature_2m')} "
-                f"{units.get('temperature_2m', '')}".rstrip()
-            ),
-            (
-                "Ощущается как: "
-                f"{current.get('apparent_temperature')} "
-                f"{units.get('apparent_temperature', '')}".rstrip()
-            ),
-            (
-                "Влажность: "
-                f"{current.get('relative_humidity_2m')} "
-                f"{units.get('relative_humidity_2m', '')}".rstrip()
-            ),
-            (
-                "Ветер: "
-                f"{current.get('wind_speed_10m')} "
-                f"{units.get('wind_speed_10m', '')}".rstrip()
-            ),
+            "Температура: "
+            f"{format_plain_value(current.get('temperature_2m'), units.get('temperature_2m', ''))}",
+            "Ощущается как: "
+            f"{format_plain_value(current.get('apparent_temperature'), units.get('apparent_temperature', ''))}",
+            "Влажность: "
+            f"{format_plain_value(current.get('relative_humidity_2m'), units.get('relative_humidity_2m', ''))}",
+            "Ветер: "
+            f"{format_plain_value(current.get('wind_speed_10m'), units.get('wind_speed_10m', ''))}",
         ]
     )
 

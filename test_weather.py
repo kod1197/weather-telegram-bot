@@ -155,7 +155,8 @@ class WeatherScriptTests(unittest.TestCase):
         self.assertIn("Погода: Москва, Москва, Россия", output)
         self.assertIn("Сейчас: переменная облачность", output)
         self.assertIn("Температура: 30.2 °C", output)
-        self.assertIn("Ветер: 9.6 km/h", output)
+        self.assertIn("Ветер: 9.6 км/ч", output)
+        self.assertNotIn("Время:", output)
 
     def test_format_weather_rejects_unexpected_response(self):
         with self.assertRaisesRegex(weather.WeatherError, "неожиданный формат"):
