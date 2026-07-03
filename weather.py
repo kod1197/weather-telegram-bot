@@ -15,6 +15,8 @@ from urllib.request import urlopen
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+API_TIMEOUT_SECONDS = 15
+API_NETWORK_ATTEMPTS = 2
 
 WEATHER_CODES = {
     0: "ясно",
@@ -63,22 +65,30 @@ def validate_city_name(city: str) -> None:
 def get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     full_url = f"{url}?{urlencode(params)}"
 
-    try:
-        with urlopen(full_url, timeout=10) as response:
-            return json.load(response)
-    except HTTPError as error:
+    last_network_error = None
+    for attempt in range(API_NETWORK_ATTEMPTS):
         try:
-            payload = json.loads(error.read().decode("utf-8"))
-            reason = payload.get("reason")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            reason = None
+            with urlopen(full_url, timeout=API_TIMEOUT_SECONDS) as response:
+                return json.load(response)
+        except HTTPError as error:
+            try:
+                payload = json.loads(error.read().decode("utf-8"))
+                reason = payload.get("reason")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                reason = None
 
-        message = reason or f"HTTP {error.code}"
-        raise WeatherError(f"API вернул ошибку: {message}") from error
-    except URLError as error:
-        raise WeatherError(f"не удалось подключиться к API: {error.reason}") from error
-    except TimeoutError as error:
-        raise WeatherError("API не ответил вовремя") from error
+            message = reason or f"HTTP {error.code}"
+            raise WeatherError(f"API вернул ошибку: {message}") from error
+        except (URLError, TimeoutError) as error:
+            last_network_error = error
+            if attempt + 1 < API_NETWORK_ATTEMPTS:
+                continue
+
+    if isinstance(last_network_error, URLError):
+        raise WeatherError(
+            f"не удалось подключиться к API: {last_network_error.reason}"
+        ) from last_network_error
+    raise WeatherError("API не ответил вовремя") from last_network_error
 
 
 def find_city(city: str) -> dict[str, Any]:

@@ -679,8 +679,9 @@ def process_due_notifications(token: str, db_path: str) -> None:
         except BotError as error:
             print(f"Telegram error: {error}", file=sys.stderr, flush=True)
         except WeatherError as error:
+            print(f"Daily weather error for chat {chat_id}: {error}", file=sys.stderr, flush=True)
             try:
-                send_message(token, chat_id, f"Ошибка ежедневной погоды: {error}")
+                send_message(token, chat_id, build_daily_weather_error_text())
                 mark_notification_sent(chat_id, sent_date, db_path)
             except BotError as bot_error:
                 print(f"Telegram error: {bot_error}", file=sys.stderr, flush=True)
@@ -732,6 +733,15 @@ def get_weather_text_for_place(place: dict[str, Any]) -> str:
 def get_weather_text_for_city(city: str) -> tuple[str, dict[str, Any]]:
     place = find_city(city)
     return get_weather_text_for_place(place), place
+
+
+def build_daily_weather_error_text() -> str:
+    return "\n".join(
+        [
+            "⚠️ Сегодня не удалось получить сводку погоды.",
+            "Погодный сервис временно не ответил. Попробуйте /today позже, а завтра я снова пришлю рассылку.",
+        ]
+    )
 
 
 def get_summary_greeting_for_place(

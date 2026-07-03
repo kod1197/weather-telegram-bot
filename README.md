@@ -305,7 +305,8 @@ Unit-файл лежит в `deploy/weather-bot.service`.
 `get_json(url: str, params: dict[str, Any]) -> dict[str, Any]`
 
 - Кодирует `params` в query string через `urlencode`.
-- Делает GET-запрос с timeout `10` секунд.
+- Делает GET-запрос с timeout `15` секунд.
+- Повторяет сетевой запрос один раз при `URLError` или `TimeoutError`.
 - Возвращает распарсенный JSON как `dict`.
 - Преобразует `HTTPError`, `URLError` и `TimeoutError` в `WeatherError`.
 
@@ -508,6 +509,8 @@ Unit-файл лежит в `deploy/weather-bot.service`.
 - Отправляет ежедневную сводку на день всем due-пользователям.
 - Приветствие выбирается по времени фактической отправки в timezone сохраненного города.
 - После успешной отправки записывает `last_notification_date`.
+- При ошибке погодного API отправляет дружелюбное сообщение без технических деталей.
+- После ошибки погодного API тоже записывает `last_notification_date`, чтобы не слать одну ошибку каждые 30 секунд.
 - Не должен ронять основной polling-цикл из-за ошибки одного пользователя.
 
 `build_response_text(text: str, chat_id: int, db_path: str | None = None, username: str | None = None) -> str`

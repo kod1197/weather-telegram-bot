@@ -46,7 +46,7 @@ class WeatherScriptTests(unittest.TestCase):
             )
 
         self.assertEqual(result, {"ok": True})
-        self.assertEqual(calls[0][1], 10)
+        self.assertEqual(calls[0][1], weather.API_TIMEOUT_SECONDS)
         self.assertIn("name=New+York", calls[0][0])
         self.assertIn("count=1", calls[0][0])
 
@@ -69,6 +69,21 @@ class WeatherScriptTests(unittest.TestCase):
         with patch("weather.urlopen", side_effect=URLError("offline")):
             with self.assertRaisesRegex(weather.WeatherError, "offline"):
                 weather.get_json("https://example.test/api", {})
+
+    def test_get_json_retries_transient_network_errors(self):
+        calls = []
+
+        def fake_urlopen(url, timeout):
+            calls.append((url, timeout))
+            if len(calls) == 1:
+                raise URLError("temporary timeout")
+            return FakeResponse('{"ok": true}')
+
+        with patch("weather.urlopen", fake_urlopen):
+            result = weather.get_json("https://example.test/api", {})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(calls), 2)
 
     def test_find_city_returns_first_search_result(self):
         place = {"name": "Москва", "latitude": 55.75, "longitude": 37.62}

@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -816,7 +816,7 @@ class BotTests(unittest.TestCase):
             "2026-07-02",
         )
 
-    def test_process_due_notifications_marks_sent_after_weather_error_message(self):
+    def test_process_due_notifications_sends_friendly_error_and_marks_sent(self):
         place = {
             "name": "Москва",
             "latitude": 55.75,
@@ -834,13 +834,17 @@ class BotTests(unittest.TestCase):
         with patch("bot.get_due_notifications", return_value=[due_item]):
             with patch(
                 "bot.get_today_summary_text_for_place",
-                side_effect=bot.WeatherError("offline"),
+                side_effect=bot.WeatherError("_ssl.c:1012: The handshake operation timed out"),
             ):
                 with patch("bot.send_message") as send_message:
-                    bot.process_due_notifications("token", self.db_path)
+                    with redirect_stderr(io.StringIO()):
+                        bot.process_due_notifications("token", self.db_path)
 
         send_message.assert_called_once()
-        self.assertIn("Ошибка ежедневной погоды", send_message.call_args.args[2])
+        message_text = send_message.call_args.args[2]
+        self.assertIn("не удалось получить сводку", message_text)
+        self.assertIn("Попробуйте /today позже", message_text)
+        self.assertNotIn("_ssl.c", message_text)
         self.assertEqual(
             bot.get_default_city(123, self.db_path)["last_notification_date"],
             "2026-07-02",
