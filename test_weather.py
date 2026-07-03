@@ -3,6 +3,7 @@ import json
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -171,7 +172,7 @@ class WeatherScriptTests(unittest.TestCase):
             },
         }
 
-        output = weather.format_daily_summary(place, forecast)
+        output = weather.format_daily_summary(place, forecast, greeting="Доброе утро!")
 
         self.assertIn("Доброе утро!", output)
         self.assertIn("Сегодня в Москва:", output)
@@ -193,12 +194,25 @@ class WeatherScriptTests(unittest.TestCase):
             "daily": {},
         }
 
-        output = weather.format_daily_summary(place, forecast)
+        output = weather.format_daily_summary(place, forecast, greeting="Добрый день!")
 
         self.assertIn("Сегодня в Казань:", output)
+        self.assertIn("Добрый день!", output)
         self.assertIn("Сейчас: -2 °C, слабый снег", output)
         self.assertNotIn("Осадки:", output)
         self.assertNotIn("Ветер:", output)
+
+    def test_get_time_based_greeting_uses_request_hour(self):
+        cases = [
+            (datetime(2026, 7, 3, 7, 30), "Доброе утро!"),
+            (datetime(2026, 7, 3, 13, 0), "Добрый день!"),
+            (datetime(2026, 7, 3, 19, 15), "Добрый вечер!"),
+            (datetime(2026, 7, 3, 2, 0), "Доброй ночи!"),
+        ]
+
+        for moment, expected in cases:
+            with self.subTest(moment=moment):
+                self.assertEqual(weather.get_time_based_greeting(moment), expected)
 
     def test_format_daily_summary_rejects_unexpected_response(self):
         with self.assertRaisesRegex(weather.WeatherError, "неожиданный формат"):

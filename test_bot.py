@@ -505,10 +505,24 @@ class BotTests(unittest.TestCase):
             with patch("bot.get_today_weather", return_value=forecast):
                 response = bot.build_response_text("/today Москва", 123, self.db_path)
 
-        self.assertIn("Доброе утро!", response)
         self.assertIn("Сегодня в Москва:", response)
         self.assertIn("Совет:", response)
         self.assertIsNone(bot.get_default_city(123, self.db_path))
+
+    def test_summary_greeting_uses_city_timezone(self):
+        moment = datetime(2026, 7, 3, 10, 0, tzinfo=timezone.utc)
+
+        moscow_greeting = bot.get_summary_greeting_for_place(
+            {"timezone": "Europe/Moscow"},
+            moment,
+        )
+        new_york_greeting = bot.get_summary_greeting_for_place(
+            {"timezone": "America/New_York"},
+            moment,
+        )
+
+        self.assertEqual(moscow_greeting, "Добрый день!")
+        self.assertEqual(new_york_greeting, "Доброе утро!")
 
     def test_today_uses_saved_default_city(self):
         place = {

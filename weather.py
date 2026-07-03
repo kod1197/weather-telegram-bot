@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -192,7 +193,22 @@ def format_weather(place: dict[str, Any], weather: dict[str, Any]) -> str:
     )
 
 
-def format_daily_summary(place: dict[str, Any], weather: dict[str, Any]) -> str:
+def get_time_based_greeting(moment: datetime) -> str:
+    hour = moment.hour
+    if 5 <= hour < 12:
+        return "Доброе утро!"
+    if 12 <= hour < 18:
+        return "Добрый день!"
+    if 18 <= hour < 23:
+        return "Добрый вечер!"
+    return "Доброй ночи!"
+
+
+def format_daily_summary(
+    place: dict[str, Any],
+    weather: dict[str, Any],
+    greeting: str = "Здравствуйте!",
+) -> str:
     current = weather.get("current")
     daily = weather.get("daily")
     if not isinstance(current, dict) and not isinstance(daily, dict):
@@ -212,7 +228,7 @@ def format_daily_summary(place: dict[str, Any], weather: dict[str, Any]) -> str:
     )
 
     lines = [
-        "Доброе утро!",
+        greeting,
         "",
         f"Сегодня в {city}:",
     ]

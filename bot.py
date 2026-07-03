@@ -20,6 +20,7 @@ from weather import (
     format_daily_summary,
     format_weather,
     get_today_weather,
+    get_time_based_greeting,
     get_weather,
 )
 
@@ -70,7 +71,7 @@ ADMIN_BUTTONS = {
 }
 BOT_COMMANDS = [
     {"command": "weather", "description": "Погода для города по умолчанию"},
-    {"command": "today", "description": "Утренняя сводка на день"},
+    {"command": "today", "description": "Сводка на день"},
     {"command": "setcity", "description": "Сохранить город по умолчанию"},
     {"command": "settime", "description": "Настроить ежедневную рассылку"},
     {"command": "stopnotify", "description": "Отключить ежедневную рассылку"},
@@ -86,7 +87,7 @@ HELP_TEXT = "\n".join(
         "",
         "Кнопки:",
         f"{BUTTON_WEATHER} - погода для города по умолчанию",
-        f"{BUTTON_TODAY} - утренняя сводка на день",
+        f"{BUTTON_TODAY} - сводка на день",
         f"{BUTTON_SET_CITY} - сохранить город по умолчанию",
         f"{BUTTON_MY_CITY} - показать сохраненный город",
         f"{BUTTON_SET_TIME} - ежедневная погода в выбранное время",
@@ -733,14 +734,32 @@ def get_weather_text_for_city(city: str) -> tuple[str, dict[str, Any]]:
     return get_weather_text_for_place(place), place
 
 
-def get_today_summary_text_for_place(place: dict[str, Any]) -> str:
+def get_summary_greeting_for_place(
+    place: dict[str, Any],
+    now: datetime | None = None,
+) -> str:
+    local_now = now_in_timezone(place.get("timezone"), now or datetime.now(timezone.utc))
+    return get_time_based_greeting(local_now)
+
+
+def get_today_summary_text_for_place(
+    place: dict[str, Any],
+    now: datetime | None = None,
+) -> str:
     weather = get_today_weather(place)
-    return format_daily_summary(place, weather)
+    return format_daily_summary(
+        place,
+        weather,
+        greeting=get_summary_greeting_for_place(place, now),
+    )
 
 
-def get_today_summary_text_for_city(city: str) -> tuple[str, dict[str, Any]]:
+def get_today_summary_text_for_city(
+    city: str,
+    now: datetime | None = None,
+) -> tuple[str, dict[str, Any]]:
     place = find_city(city)
-    return get_today_summary_text_for_place(place), place
+    return get_today_summary_text_for_place(place, now), place
 
 
 def add_weather_emoji(text: str) -> str:
