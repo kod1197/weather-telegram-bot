@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+.ssh/
+data/
+SERVER_ACCESS.md
