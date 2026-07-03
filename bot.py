@@ -14,7 +14,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from weather import WeatherError, find_city, format_weather, get_weather
+from weather import (
+    WeatherError,
+    find_city,
+    format_daily_summary,
+    format_weather,
+    get_today_weather,
+    get_weather,
+)
 
 
 API_BASE_URL = "https://api.telegram.org"
@@ -29,6 +36,7 @@ PENDING_SET_TIME = "set_notification_time"
 PENDING_ADMIN_BAN = "admin_ban_user"
 PENDING_ADMIN_UNBAN = "admin_unban_user"
 BUTTON_WEATHER = "🌤 Погода"
+BUTTON_TODAY = "📅 Сегодня"
 BUTTON_SET_CITY = "🏙 Настроить город"
 BUTTON_MY_CITY = "📍 Мой город"
 BUTTON_SET_TIME = "⏰ Настроить рассылку"
@@ -62,6 +70,7 @@ ADMIN_BUTTONS = {
 }
 BOT_COMMANDS = [
     {"command": "weather", "description": "Погода для города по умолчанию"},
+    {"command": "today", "description": "Утренняя сводка на день"},
     {"command": "setcity", "description": "Сохранить город по умолчанию"},
     {"command": "settime", "description": "Настроить ежедневную рассылку"},
     {"command": "stopnotify", "description": "Отключить ежедневную рассылку"},
@@ -77,6 +86,7 @@ HELP_TEXT = "\n".join(
         "",
         "Кнопки:",
         f"{BUTTON_WEATHER} - погода для города по умолчанию",
+        f"{BUTTON_TODAY} - утренняя сводка на день",
         f"{BUTTON_SET_CITY} - сохранить город по умолчанию",
         f"{BUTTON_MY_CITY} - показать сохраненный город",
         f"{BUTTON_SET_TIME} - ежедневная погода в выбранное время",
@@ -660,8 +670,8 @@ def process_due_notifications(token: str, db_path: str) -> None:
         sent_date = item["sent_date"]
         try:
             text = (
-                "⏰ Ежедневная погода\n\n"
-                f"{get_weather_text_for_place(item['place'])}"
+                "⏰ Ежедневная сводка\n\n"
+                f"{get_today_summary_text_for_place(item['place'])}"
             )
             send_message(token, chat_id, text)
             mark_notification_sent(chat_id, sent_date, db_path)
@@ -721,6 +731,16 @@ def get_weather_text_for_place(place: dict[str, Any]) -> str:
 def get_weather_text_for_city(city: str) -> tuple[str, dict[str, Any]]:
     place = find_city(city)
     return get_weather_text_for_place(place), place
+
+
+def get_today_summary_text_for_place(place: dict[str, Any]) -> str:
+    weather = get_today_weather(place)
+    return format_daily_summary(place, weather)
+
+
+def get_today_summary_text_for_city(city: str) -> tuple[str, dict[str, Any]]:
+    place = find_city(city)
+    return get_today_summary_text_for_place(place), place
 
 
 def add_weather_emoji(text: str) -> str:
@@ -831,7 +851,7 @@ def send_message(
 
 def build_main_keyboard(include_admin: bool = False) -> dict[str, Any]:
     keyboard = [
-        [{"text": BUTTON_WEATHER}],
+        [{"text": BUTTON_WEATHER}, {"text": BUTTON_TODAY}],
         [{"text": BUTTON_SET_CITY}, {"text": BUTTON_MY_CITY}],
         [{"text": BUTTON_SET_TIME}, {"text": BUTTON_DISABLE_NOTIFICATIONS}],
         [{"text": BUTTON_HELP}],
@@ -953,6 +973,24 @@ def build_response_text(
             set_pending_action(chat_id, None, db_path)
             return "🔕 Ежедневная отправка погоды отключена."
         return f"🏙️ Город по умолчанию пока не выбран. Нажмите «{BUTTON_SET_CITY}»."
+
+    if command == "/today" or message == BUTTON_TODAY:
+        city = "" if message == BUTTON_TODAY else argument.strip()
+        if city:
+            try:
+                summary_text, _ = get_today_summary_text_for_city(city)
+                return summary_text
+            except WeatherError as error:
+                return f"Ошибка: {error}"
+
+        default_place = get_default_city(chat_id, db_path)
+        if default_place is None:
+            return f"🏙️ Сначала выберите город по умолчанию: нажмите «{BUTTON_SET_CITY}»."
+
+        try:
+            return get_today_summary_text_for_place(default_place)
+        except WeatherError as error:
+            return f"Ошибка: {error}"
 
     if command == "/city" or message == BUTTON_MY_CITY:
         default_place = get_default_city(chat_id, db_path)

@@ -475,6 +475,82 @@ class BotTests(unittest.TestCase):
         self.assertIn("🌍 Погода: Москва", response)
         self.assertIsNone(bot.get_default_city(123, self.db_path))
 
+    def test_today_with_argument_does_not_change_default_city(self):
+        place = {"name": "Москва", "latitude": 55.75, "longitude": 37.62}
+        forecast = {
+            "current": {
+                "temperature_2m": 12.0,
+                "apparent_temperature": 10.0,
+                "weather_code": 3,
+            },
+            "current_units": {
+                "temperature_2m": "°C",
+                "apparent_temperature": "°C",
+            },
+            "daily": {
+                "temperature_2m_min": [8.0],
+                "temperature_2m_max": [17.0],
+                "precipitation_probability_max": [60],
+                "wind_speed_10m_max": [25.0],
+            },
+            "daily_units": {
+                "temperature_2m_min": "°C",
+                "temperature_2m_max": "°C",
+                "precipitation_probability_max": "%",
+                "wind_speed_10m_max": "km/h",
+            },
+        }
+
+        with patch("bot.find_city", return_value=place):
+            with patch("bot.get_today_weather", return_value=forecast):
+                response = bot.build_response_text("/today Москва", 123, self.db_path)
+
+        self.assertIn("Доброе утро!", response)
+        self.assertIn("Сегодня в Москва:", response)
+        self.assertIn("Совет:", response)
+        self.assertIsNone(bot.get_default_city(123, self.db_path))
+
+    def test_today_uses_saved_default_city(self):
+        place = {
+            "name": "Казань",
+            "admin1": "Татарстан",
+            "country": "Россия",
+            "latitude": 55.79,
+            "longitude": 49.12,
+        }
+        forecast = {
+            "current": {"temperature_2m": 20.0, "weather_code": 1},
+            "current_units": {"temperature_2m": "°C"},
+            "daily": {"temperature_2m_min": [15.0], "temperature_2m_max": [24.0]},
+            "daily_units": {"temperature_2m_min": "°C", "temperature_2m_max": "°C"},
+        }
+        bot.save_default_city(123, place, self.db_path)
+
+        with patch("bot.get_today_weather", return_value=forecast) as get_today_weather:
+            response = bot.build_response_text("/today", 123, self.db_path)
+
+        self.assertIn("Сегодня в Казань:", response)
+        self.assertEqual(get_today_weather.call_args.args[0]["latitude"], 55.79)
+
+    def test_today_button_uses_saved_default_city(self):
+        place = {"name": "Пермь", "latitude": 58.01, "longitude": 56.25}
+        forecast = {
+            "current": {"temperature_2m": 18.0, "weather_code": 2},
+            "current_units": {"temperature_2m": "°C"},
+            "daily": {},
+        }
+        bot.save_default_city(123, place, self.db_path)
+
+        with patch("bot.get_today_weather", return_value=forecast):
+            response = bot.build_response_text(bot.BUTTON_TODAY, 123, self.db_path)
+
+        self.assertIn("Сегодня в Пермь:", response)
+
+    def test_today_without_default_city_asks_to_set_city(self):
+        response = bot.build_response_text("/today", 123, self.db_path)
+
+        self.assertIn(bot.BUTTON_SET_CITY, response)
+
     def test_send_message_includes_persistent_reply_keyboard(self):
         with patch("bot.telegram_request") as telegram_request:
             bot.send_message("token", 123, "hello")
@@ -517,6 +593,7 @@ class BotTests(unittest.TestCase):
         keyboard = bot.build_main_keyboard()["keyboard"]
 
         labels = [button["text"] for row in keyboard for button in row]
+        self.assertIn(bot.BUTTON_TODAY, labels)
         self.assertIn(bot.BUTTON_SET_TIME, labels)
         self.assertIn(bot.BUTTON_DISABLE_NOTIFICATIONS, labels)
 
@@ -697,7 +774,7 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual(due, [])
 
-    def test_process_due_notifications_sends_weather_and_marks_sent(self):
+    def test_process_due_notifications_sends_today_summary_and_marks_sent(self):
         place = {
             "name": "Москва",
             "latitude": 55.75,
@@ -713,12 +790,13 @@ class BotTests(unittest.TestCase):
             "sent_date": "2026-07-02",
         }
         with patch("bot.get_due_notifications", return_value=[due_item]):
-            with patch("bot.get_weather_text_for_place", return_value="weather"):
+            with patch("bot.get_today_summary_text_for_place", return_value="summary"):
                 with patch("bot.send_message") as send_message:
                     bot.process_due_notifications("token", self.db_path)
 
         send_message.assert_called_once()
-        self.assertIn("Ежедневная погода", send_message.call_args.args[2])
+        self.assertIn("Ежедневная сводка", send_message.call_args.args[2])
+        self.assertIn("summary", send_message.call_args.args[2])
         self.assertEqual(
             bot.get_default_city(123, self.db_path)["last_notification_date"],
             "2026-07-02",
@@ -741,7 +819,7 @@ class BotTests(unittest.TestCase):
 
         with patch("bot.get_due_notifications", return_value=[due_item]):
             with patch(
-                "bot.get_weather_text_for_place",
+                "bot.get_today_summary_text_for_place",
                 side_effect=bot.WeatherError("offline"),
             ):
                 with patch("bot.send_message") as send_message:
@@ -935,7 +1013,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(params["language_code"], "ru")
         self.assertEqual(
             [command["command"] for command in params["commands"]],
-            ["weather", "setcity", "settime", "stopnotify", "city", "help"],
+            ["weather", "today", "setcity", "settime", "stopnotify", "city", "help"],
         )
 
     def test_run_polling_sets_menu_before_reading_updates(self):

@@ -99,6 +99,22 @@ class WeatherScriptTests(unittest.TestCase):
         self.assertIn("temperature_2m", params["current"])
         self.assertIn("weather_code", params["current"])
 
+    def test_get_today_weather_requests_current_and_daily_weather(self):
+        place = {"latitude": 55.75, "longitude": 37.62}
+
+        with patch("weather.get_json", return_value={"current": {}, "daily": {}}) as get_json:
+            weather.get_today_weather(place)
+
+        url, params = get_json.call_args.args
+        self.assertEqual(url, weather.FORECAST_URL)
+        self.assertEqual(params["latitude"], 55.75)
+        self.assertEqual(params["longitude"], 37.62)
+        self.assertEqual(params["timezone"], "auto")
+        self.assertEqual(params["forecast_days"], 1)
+        self.assertIn("temperature_2m", params["current"])
+        self.assertIn("temperature_2m_min", params["daily"])
+        self.assertIn("precipitation_probability_max", params["daily"])
+
     def test_format_weather_builds_readable_output(self):
         place = {"name": "Москва", "admin1": "Москва", "country": "Россия"}
         forecast = {
@@ -128,6 +144,65 @@ class WeatherScriptTests(unittest.TestCase):
     def test_format_weather_rejects_unexpected_response(self):
         with self.assertRaisesRegex(weather.WeatherError, "неожиданный формат"):
             weather.format_weather({}, {"current": None})
+
+    def test_format_daily_summary_builds_morning_summary_and_advice(self):
+        place = {"name": "Москва", "admin1": "Москва", "country": "Россия"}
+        forecast = {
+            "current": {
+                "temperature_2m": 12.0,
+                "apparent_temperature": 10.0,
+                "weather_code": 3,
+            },
+            "current_units": {
+                "temperature_2m": "°C",
+                "apparent_temperature": "°C",
+            },
+            "daily": {
+                "temperature_2m_min": [8.0],
+                "temperature_2m_max": [17.0],
+                "precipitation_probability_max": [60],
+                "wind_speed_10m_max": [25.0],
+            },
+            "daily_units": {
+                "temperature_2m_min": "°C",
+                "temperature_2m_max": "°C",
+                "precipitation_probability_max": "%",
+                "wind_speed_10m_max": "km/h",
+            },
+        }
+
+        output = weather.format_daily_summary(place, forecast)
+
+        self.assertIn("Доброе утро!", output)
+        self.assertIn("Сегодня в Москва:", output)
+        self.assertIn("Сейчас: +12 °C, пасмурно", output)
+        self.assertIn("Ощущается как: +10 °C", output)
+        self.assertIn("Днем: от +8 °C до +17 °C", output)
+        self.assertIn("Осадки: вероятность до 60 %", output)
+        self.assertIn("Ветер: до 25 км/ч", output)
+        self.assertIn("Совет: лучше взять куртку и зонт.", output)
+
+    def test_format_daily_summary_skips_missing_optional_daily_fields(self):
+        place = {"name": "Казань"}
+        forecast = {
+            "current": {
+                "temperature_2m": -2,
+                "weather_code": 71,
+            },
+            "current_units": {"temperature_2m": "°C"},
+            "daily": {},
+        }
+
+        output = weather.format_daily_summary(place, forecast)
+
+        self.assertIn("Сегодня в Казань:", output)
+        self.assertIn("Сейчас: -2 °C, слабый снег", output)
+        self.assertNotIn("Осадки:", output)
+        self.assertNotIn("Ветер:", output)
+
+    def test_format_daily_summary_rejects_unexpected_response(self):
+        with self.assertRaisesRegex(weather.WeatherError, "неожиданный формат"):
+            weather.format_daily_summary({}, {"current": None, "daily": None})
 
     def test_main_prints_weather_for_city_argument(self):
         output = io.StringIO()

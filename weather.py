@@ -120,6 +120,35 @@ def get_weather(place: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def get_today_weather(place: dict[str, Any]) -> dict[str, Any]:
+    return get_json(
+        FORECAST_URL,
+        {
+            "latitude": place["latitude"],
+            "longitude": place["longitude"],
+            "current": ",".join(
+                [
+                    "temperature_2m",
+                    "apparent_temperature",
+                    "weather_code",
+                    "wind_speed_10m",
+                ]
+            ),
+            "daily": ",".join(
+                [
+                    "weather_code",
+                    "temperature_2m_min",
+                    "temperature_2m_max",
+                    "precipitation_probability_max",
+                    "wind_speed_10m_max",
+                ]
+            ),
+            "forecast_days": 1,
+            "timezone": "auto",
+        },
+    )
+
+
 def format_weather(place: dict[str, Any], weather: dict[str, Any]) -> str:
     current = weather.get("current")
     if not isinstance(current, dict):
@@ -161,6 +190,136 @@ def format_weather(place: dict[str, Any], weather: dict[str, Any]) -> str:
             ),
         ]
     )
+
+
+def format_daily_summary(place: dict[str, Any], weather: dict[str, Any]) -> str:
+    current = weather.get("current")
+    daily = weather.get("daily")
+    if not isinstance(current, dict) and not isinstance(daily, dict):
+        raise WeatherError("API вернул неожиданный формат ответа")
+
+    current = current if isinstance(current, dict) else {}
+    daily = daily if isinstance(daily, dict) else {}
+    current_units = weather.get("current_units", {})
+    daily_units = weather.get("daily_units", {})
+
+    city = place.get("name", "Неизвестном городе")
+    current_code = current.get("weather_code")
+    daily_code = get_daily_value(daily, "weather_code")
+    description = WEATHER_CODES.get(
+        current_code if current_code is not None else daily_code,
+        "погода без описания",
+    )
+
+    lines = [
+        "Доброе утро!",
+        "",
+        f"Сегодня в {city}:",
+    ]
+
+    current_temp = current.get("temperature_2m")
+    current_temp_text = format_temperature(
+        current_temp,
+        current_units.get("temperature_2m", "°C"),
+    )
+    if current_temp_text:
+        lines.append(f"Сейчас: {current_temp_text}, {description}")
+    else:
+        lines.append(f"Сейчас: {description}")
+
+    apparent_temp_text = format_temperature(
+        current.get("apparent_temperature"),
+        current_units.get("apparent_temperature", "°C"),
+    )
+    if apparent_temp_text:
+        lines.append(f"Ощущается как: {apparent_temp_text}")
+
+    min_temp = get_daily_value(daily, "temperature_2m_min")
+    max_temp = get_daily_value(daily, "temperature_2m_max")
+    min_temp_text = format_temperature(
+        min_temp,
+        daily_units.get("temperature_2m_min", "°C"),
+    )
+    max_temp_text = format_temperature(
+        max_temp,
+        daily_units.get("temperature_2m_max", "°C"),
+    )
+    if min_temp_text and max_temp_text:
+        lines.append(f"Днем: от {min_temp_text} до {max_temp_text}")
+
+    precipitation = get_daily_value(daily, "precipitation_probability_max")
+    precipitation_text = format_plain_value(
+        precipitation,
+        daily_units.get("precipitation_probability_max", "%"),
+    )
+    if precipitation_text:
+        lines.append(f"Осадки: вероятность до {precipitation_text}")
+
+    wind = get_daily_value(daily, "wind_speed_10m_max")
+    wind_text = format_plain_value(wind, daily_units.get("wind_speed_10m_max", "км/ч"))
+    if wind_text:
+        lines.append(f"Ветер: до {wind_text}")
+
+    lines.extend(["", f"Совет: {build_daily_advice(min_temp, max_temp, precipitation, wind)}"])
+    return "\n".join(lines)
+
+
+def get_daily_value(daily: dict[str, Any], key: str) -> Any:
+    value = daily.get(key)
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def format_temperature(value: Any, unit: str = "°C") -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+
+    sign = "+" if value > 0 else ""
+    return f"{sign}{format_number(value)} {unit}".strip()
+
+
+def format_plain_value(value: Any, unit: str = "") -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+
+    normalized_unit = "км/ч" if unit == "km/h" else unit
+    return f"{format_number(value)} {normalized_unit}".strip()
+
+
+def format_number(value: int | float) -> str:
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def build_daily_advice(
+    min_temp: Any,
+    max_temp: Any,
+    precipitation_probability: Any,
+    max_wind: Any,
+) -> str:
+    rainy = isinstance(precipitation_probability, (int, float)) and precipitation_probability >= 50
+    cold = isinstance(max_temp, (int, float)) and max_temp <= 18
+    very_cold = isinstance(max_temp, (int, float)) and max_temp <= 5
+    hot = isinstance(max_temp, (int, float)) and max_temp >= 28
+    windy = isinstance(max_wind, (int, float)) and max_wind >= 25
+
+    if rainy and cold:
+        return "лучше взять куртку и зонт."
+    if rainy:
+        return "зонт сегодня пригодится."
+    if very_cold:
+        return "оденьтесь теплее."
+    if cold:
+        return "лучше взять куртку."
+    if hot:
+        return "берите воду и избегайте перегрева."
+    if windy:
+        return "ветрено, выбирайте одежду поплотнее."
+    if isinstance(min_temp, (int, float)) and min_temp <= 10:
+        return "утром может быть прохладно, возьмите легкий слой."
+    return "день выглядит спокойным, одевайтесь по погоде."
 
 
 def parse_args() -> argparse.Namespace:
