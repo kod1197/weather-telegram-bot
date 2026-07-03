@@ -20,16 +20,46 @@ from weather import WeatherError, find_city, format_weather, get_weather
 API_BASE_URL = "https://api.telegram.org"
 BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 BOT_DB_ENV = "WEATHER_BOT_DB"
+ADMIN_USERNAMES_ENV = "ADMIN_USERNAMES"
 LONG_POLL_TIMEOUT = 30
 DEFAULT_DB_PATH = os.path.join("data", "weather-bot.sqlite3")
+DEFAULT_ADMIN_USERNAMES = "kod1197"
 PENDING_SET_CITY = "set_default_city"
 PENDING_SET_TIME = "set_notification_time"
+PENDING_ADMIN_BAN = "admin_ban_user"
+PENDING_ADMIN_UNBAN = "admin_unban_user"
 BUTTON_WEATHER = "🌤 Погода"
 BUTTON_SET_CITY = "🏙 Настроить город"
 BUTTON_MY_CITY = "📍 Мой город"
 BUTTON_SET_TIME = "⏰ Настроить рассылку"
 BUTTON_DISABLE_NOTIFICATIONS = "🔕 Отключить рассылку"
 BUTTON_HELP = "ℹ️ Помощь"
+BUTTON_ADMIN_MENU = "🛠 Админка"
+BUTTON_ADMIN_METRICS = "📊 Метрики"
+BUTTON_ADMIN_USERS = "👥 Пользователи"
+BUTTON_ADMIN_BAN = "⛔ Забанить"
+BUTTON_ADMIN_UNBAN = "✅ Разбанить"
+BUTTON_ADMIN_BANS = "🚫 Баны"
+BUTTON_MAIN_MENU = "↩️ Основное меню"
+ADMIN_COMMANDS = {
+    "/admin",
+    "/admin_metrics",
+    "/admin_users",
+    "/admin_ban",
+    "/admin_unban",
+    "/admin_bans",
+    "/ban",
+    "/unban",
+    "/bans",
+}
+ADMIN_BUTTONS = {
+    BUTTON_ADMIN_MENU,
+    BUTTON_ADMIN_METRICS,
+    BUTTON_ADMIN_USERS,
+    BUTTON_ADMIN_BAN,
+    BUTTON_ADMIN_UNBAN,
+    BUTTON_ADMIN_BANS,
+}
 BOT_COMMANDS = [
     {"command": "weather", "description": "Погода для города по умолчанию"},
     {"command": "setcity", "description": "Сохранить город по умолчанию"},
@@ -102,6 +132,28 @@ def init_database(db_path: str) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bot_users (
+                chat_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS banned_users (
+                chat_id INTEGER PRIMARY KEY,
+                reason TEXT,
+                banned_by_username TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         connection.commit()
     finally:
         connection.close()
@@ -129,6 +181,226 @@ def place_to_location(place: dict[str, Any]) -> str:
         for part in [place.get("name"), place.get("admin1"), place.get("country")]
         if part
     )
+
+
+def normalize_username(username: str | None) -> str:
+    return (username or "").strip().lstrip("@").lower()
+
+
+def get_admin_usernames() -> set[str]:
+    raw_usernames = os.environ.get(ADMIN_USERNAMES_ENV, DEFAULT_ADMIN_USERNAMES)
+    return {
+        normalized
+        for username in raw_usernames.split(",")
+        if (normalized := normalize_username(username))
+    }
+
+
+def is_admin(username: str | None, admin_usernames: set[str] | None = None) -> bool:
+    normalized = normalize_username(username)
+    if not normalized:
+        return False
+    return normalized in (admin_usernames or get_admin_usernames())
+
+
+def record_user_from_message(message: dict[str, Any], db_path: str) -> None:
+    chat = message.get("chat")
+    user = message.get("from")
+    if not isinstance(chat, dict) or not isinstance(user, dict):
+        return
+
+    chat_id = chat.get("id")
+    if not isinstance(chat_id, int):
+        return
+
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO bot_users (
+                chat_id,
+                username,
+                first_name,
+                last_name,
+                last_seen_at
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                last_seen_at = CURRENT_TIMESTAMP
+            """,
+            (
+                chat_id,
+                user.get("username"),
+                user.get("first_name"),
+                user.get("last_name"),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_admin_metrics(db_path: str) -> dict[str, int]:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        total_users = connection.execute("SELECT COUNT(*) FROM bot_users").fetchone()[0]
+        users_with_city = connection.execute(
+            "SELECT COUNT(*) FROM user_settings"
+        ).fetchone()[0]
+        enabled_notifications = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM user_settings
+            WHERE notification_enabled = 1
+                AND notification_time IS NOT NULL
+            """
+        ).fetchone()[0]
+        pending_actions = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM user_state
+            WHERE pending_action IS NOT NULL
+            """
+        ).fetchone()[0]
+        banned_users = connection.execute(
+            "SELECT COUNT(*) FROM banned_users"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    return {
+        "total_users": total_users,
+        "users_with_city": users_with_city,
+        "enabled_notifications": enabled_notifications,
+        "pending_actions": pending_actions,
+        "banned_users": banned_users,
+    }
+
+
+def get_admin_users(db_path: str, limit: int = 20) -> list[dict[str, Any]]:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT
+                u.chat_id,
+                u.username,
+                u.first_name,
+                u.last_name,
+                u.created_at,
+                u.last_seen_at,
+                s.location_name,
+                s.region,
+                s.country,
+                s.notification_enabled,
+                s.notification_time,
+                b.created_at AS banned_at,
+                b.reason AS ban_reason
+            FROM bot_users AS u
+            LEFT JOIN user_settings AS s ON s.chat_id = u.chat_id
+            LEFT JOIN banned_users AS b ON b.chat_id = u.chat_id
+            ORDER BY u.last_seen_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return [dict(row) for row in rows]
+
+
+def ban_user(
+    chat_id: int,
+    reason: str | None,
+    banned_by_username: str | None,
+    db_path: str,
+) -> None:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO banned_users (
+                chat_id,
+                reason,
+                banned_by_username,
+                created_at
+            )
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                reason = excluded.reason,
+                banned_by_username = excluded.banned_by_username,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            (chat_id, reason, normalize_username(banned_by_username)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def unban_user(chat_id: int, db_path: str) -> bool:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM banned_users WHERE chat_id = ?",
+            (chat_id,),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+def is_banned(chat_id: int, db_path: str) -> bool:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT 1 FROM banned_users WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return row is not None
+
+
+def get_banned_users(db_path: str, limit: int = 20) -> list[dict[str, Any]]:
+    init_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT
+                b.chat_id,
+                b.reason,
+                b.banned_by_username,
+                b.created_at,
+                u.username,
+                u.first_name,
+                u.last_name
+            FROM banned_users AS b
+            LEFT JOIN bot_users AS u ON u.chat_id = b.chat_id
+            ORDER BY b.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return [dict(row) for row in rows]
 
 
 def save_default_city(chat_id: int, place: dict[str, Any], db_path: str) -> None:
@@ -322,19 +594,21 @@ def get_due_notifications(
         rows = connection.execute(
             """
             SELECT
-                chat_id,
-                default_city,
-                location_name,
-                region,
-                country,
-                latitude,
-                longitude,
-                notification_time,
-                timezone,
-                last_notification_date
+                user_settings.chat_id,
+                user_settings.default_city,
+                user_settings.location_name,
+                user_settings.region,
+                user_settings.country,
+                user_settings.latitude,
+                user_settings.longitude,
+                user_settings.notification_time,
+                user_settings.timezone,
+                user_settings.last_notification_date
             FROM user_settings
-            WHERE notification_enabled = 1
-                AND notification_time IS NOT NULL
+            LEFT JOIN banned_users ON banned_users.chat_id = user_settings.chat_id
+            WHERE user_settings.notification_enabled = 1
+                AND user_settings.notification_time IS NOT NULL
+                AND banned_users.chat_id IS NULL
             """
         ).fetchall()
     finally:
@@ -537,7 +811,12 @@ def get_updates(token: str, offset: int | None) -> list[dict[str, Any]]:
     return result or []
 
 
-def send_message(token: str, chat_id: int, text: str) -> None:
+def send_message(
+    token: str,
+    chat_id: int,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> None:
     telegram_request(
         token,
         "sendMessage",
@@ -545,23 +824,64 @@ def send_message(token: str, chat_id: int, text: str) -> None:
             "chat_id": chat_id,
             "text": text,
             "disable_web_page_preview": True,
-            "reply_markup": build_main_keyboard(),
+            "reply_markup": reply_markup or build_main_keyboard(),
         },
     )
 
 
-def build_main_keyboard() -> dict[str, Any]:
+def build_main_keyboard(include_admin: bool = False) -> dict[str, Any]:
+    keyboard = [
+        [{"text": BUTTON_WEATHER}],
+        [{"text": BUTTON_SET_CITY}, {"text": BUTTON_MY_CITY}],
+        [{"text": BUTTON_SET_TIME}, {"text": BUTTON_DISABLE_NOTIFICATIONS}],
+        [{"text": BUTTON_HELP}],
+    ]
+    if include_admin:
+        keyboard.append([{"text": BUTTON_ADMIN_MENU}])
+
     return {
-        "keyboard": [
-            [{"text": BUTTON_WEATHER}],
-            [{"text": BUTTON_SET_CITY}, {"text": BUTTON_MY_CITY}],
-            [{"text": BUTTON_SET_TIME}, {"text": BUTTON_DISABLE_NOTIFICATIONS}],
-            [{"text": BUTTON_HELP}],
-        ],
+        "keyboard": keyboard,
         "resize_keyboard": True,
         "is_persistent": True,
         "input_field_placeholder": "Выберите действие или напишите город",
     }
+
+
+def build_admin_keyboard() -> dict[str, Any]:
+    return {
+        "keyboard": [
+            [{"text": BUTTON_ADMIN_METRICS}, {"text": BUTTON_ADMIN_USERS}],
+            [{"text": BUTTON_ADMIN_BAN}, {"text": BUTTON_ADMIN_UNBAN}],
+            [{"text": BUTTON_ADMIN_BANS}],
+            [{"text": BUTTON_MAIN_MENU}],
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True,
+        "input_field_placeholder": "Выберите действие админки",
+    }
+
+
+def build_reply_markup_for_message(
+    text: str,
+    username: str | None,
+    pending_action: str | None = None,
+) -> dict[str, Any]:
+    if not is_admin(username):
+        return build_main_keyboard()
+
+    message = text.strip()
+    command = message.partition(" ")[0].split("@", 1)[0]
+    if message == BUTTON_MAIN_MENU:
+        return build_main_keyboard(include_admin=True)
+
+    if (
+        message in ADMIN_BUTTONS
+        or command in ADMIN_COMMANDS
+        or pending_action in {PENDING_ADMIN_BAN, PENDING_ADMIN_UNBAN}
+    ):
+        return build_admin_keyboard()
+
+    return build_main_keyboard(include_admin=True)
 
 
 def set_bot_commands(token: str) -> None:
@@ -576,7 +896,12 @@ def set_bot_commands(token: str) -> None:
     )
 
 
-def build_response_text(text: str, chat_id: int, db_path: str | None = None) -> str:
+def build_response_text(
+    text: str,
+    chat_id: int,
+    db_path: str | None = None,
+    username: str | None = None,
+) -> str:
     message = text.strip()
     db_path = db_path or get_database_path()
 
@@ -584,6 +909,21 @@ def build_response_text(text: str, chat_id: int, db_path: str | None = None) -> 
         return HELP_TEXT
 
     command, _, argument = message.partition(" ")
+    command = command.split("@", 1)[0]
+
+    if message == BUTTON_MAIN_MENU:
+        set_pending_action(chat_id, None, db_path)
+        return "Основное меню открыто."
+
+    if command in ADMIN_COMMANDS or message in ADMIN_BUTTONS:
+        return build_admin_response(message, command, argument, chat_id, db_path, username)
+
+    pending_action = get_pending_action(chat_id, db_path)
+    if is_admin(username) and pending_action == PENDING_ADMIN_BAN:
+        return build_ban_response(message, chat_id, db_path, username)
+
+    if is_admin(username) and pending_action == PENDING_ADMIN_UNBAN:
+        return build_unban_response(message, db_path)
 
     if message == BUTTON_SET_CITY:
         set_pending_action(chat_id, PENDING_SET_CITY, db_path)
@@ -665,7 +1005,7 @@ def build_response_text(text: str, chat_id: int, db_path: str | None = None) -> 
     if not message:
         return "Напишите название города."
 
-    if get_pending_action(chat_id, db_path) == PENDING_SET_CITY:
+    if pending_action == PENDING_SET_CITY:
         try:
             place = find_city(message)
             save_default_city(chat_id, place, db_path)
@@ -677,7 +1017,7 @@ def build_response_text(text: str, chat_id: int, db_path: str | None = None) -> 
         except WeatherError as error:
             return f"Ошибка: {error}\nНапишите другой город."
 
-    if get_pending_action(chat_id, db_path) == PENDING_SET_TIME:
+    if pending_action == PENDING_SET_TIME:
         return build_set_time_response(message, chat_id, db_path)
 
     try:
@@ -688,6 +1028,169 @@ def build_response_text(text: str, chat_id: int, db_path: str | None = None) -> 
         )
     except WeatherError as error:
         return f"Ошибка: {error}"
+
+
+def build_admin_response(
+    message: str,
+    command: str,
+    argument: str,
+    chat_id: int,
+    db_path: str,
+    username: str | None,
+) -> str:
+    if not is_admin(username):
+        return "⛔ Команда доступна только администратору."
+
+    if command == "/admin" or message == BUTTON_ADMIN_MENU:
+        set_pending_action(chat_id, None, db_path)
+        return "\n".join(
+            [
+                "🛠 Админка weather-бота",
+                "",
+                f"{BUTTON_ADMIN_METRICS} - базовые метрики",
+                f"{BUTTON_ADMIN_USERS} - последние пользователи",
+                f"{BUTTON_ADMIN_BAN} - забанить пользователя по chat_id",
+                f"{BUTTON_ADMIN_UNBAN} - снять бан по chat_id",
+                f"{BUTTON_ADMIN_BANS} - список банов",
+                f"{BUTTON_MAIN_MENU} - вернуться к погоде",
+                "",
+                "Также работают команды: /admin_metrics, /admin_users, /ban, /unban, /bans",
+            ]
+        )
+
+    if command == "/admin_metrics" or message == BUTTON_ADMIN_METRICS:
+        return format_admin_metrics(get_admin_metrics(db_path))
+
+    if command == "/admin_users" or message == BUTTON_ADMIN_USERS:
+        return format_admin_users(get_admin_users(db_path))
+
+    if command in {"/admin_bans", "/bans"} or message == BUTTON_ADMIN_BANS:
+        return format_banned_users(get_banned_users(db_path))
+
+    if command in {"/admin_ban", "/ban"} or message == BUTTON_ADMIN_BAN:
+        if message != BUTTON_ADMIN_BAN and argument.strip():
+            return build_ban_response(argument, chat_id, db_path, username)
+        set_pending_action(chat_id, PENDING_ADMIN_BAN, db_path)
+        return "⛔ Напишите chat_id для бана и причину, например: 12345 спам"
+
+    if command in {"/admin_unban", "/unban"} or message == BUTTON_ADMIN_UNBAN:
+        if message != BUTTON_ADMIN_UNBAN and argument.strip():
+            return build_unban_response(argument, db_path)
+        set_pending_action(chat_id, PENDING_ADMIN_UNBAN, db_path)
+        return "✅ Напишите chat_id пользователя, которого нужно разбанить."
+
+    return "Не знаю такую админ-команду. Используйте /admin."
+
+
+def parse_chat_id_argument(value: str) -> tuple[int, str]:
+    chat_id_text, _, reason = value.strip().partition(" ")
+    if not chat_id_text:
+        raise BotError("укажите chat_id пользователя")
+
+    try:
+        chat_id = int(chat_id_text)
+    except ValueError as error:
+        raise BotError("chat_id должен быть числом") from error
+
+    return chat_id, reason.strip()
+
+
+def build_ban_response(
+    value: str,
+    admin_chat_id: int,
+    db_path: str,
+    username: str | None,
+) -> str:
+    try:
+        target_chat_id, reason = parse_chat_id_argument(value)
+    except BotError as error:
+        return f"Ошибка: {error}\nНапишите chat_id еще раз."
+
+    if target_chat_id == admin_chat_id:
+        return "⛔ Нельзя забанить самого себя."
+
+    ban_user(target_chat_id, reason or None, username, db_path)
+    set_pending_action(admin_chat_id, None, db_path)
+    reason_text = f"\nПричина: {reason}" if reason else ""
+    return f"✅ Пользователь {target_chat_id} забанен.{reason_text}"
+
+
+def build_unban_response(value: str, db_path: str) -> str:
+    try:
+        target_chat_id, _ = parse_chat_id_argument(value)
+    except BotError as error:
+        return f"Ошибка: {error}\nНапишите chat_id еще раз."
+
+    if unban_user(target_chat_id, db_path):
+        return f"✅ Пользователь {target_chat_id} разбанен."
+    return f"Пользователь {target_chat_id} не был в бане."
+
+
+def format_admin_metrics(metrics: dict[str, int]) -> str:
+    return "\n".join(
+        [
+            "📊 Метрики",
+            f"👥 Пользователей: {metrics['total_users']}",
+            f"🏙 С городом по умолчанию: {metrics['users_with_city']}",
+            f"⏰ Активных рассылок: {metrics['enabled_notifications']}",
+            f"🚫 В бане: {metrics['banned_users']}",
+            f"✍️ Незавершенных диалогов: {metrics['pending_actions']}",
+        ]
+    )
+
+
+def format_admin_users(users: list[dict[str, Any]]) -> str:
+    if not users:
+        return "👥 Пользователей пока нет."
+
+    lines = ["👥 Последние пользователи:"]
+    for index, user in enumerate(users, start=1):
+        username = user.get("username")
+        display_name = " ".join(
+            part
+            for part in [user.get("first_name"), user.get("last_name")]
+            if part
+        )
+        identity = f"@{username}" if username else (display_name or "без username")
+        city = place_to_location(
+            {
+                "name": user.get("location_name"),
+                "admin1": user.get("region"),
+                "country": user.get("country"),
+            }
+        )
+        city_text = city or "город не выбран"
+        notification_text = "рассылка выкл"
+        if user.get("notification_enabled") and user.get("notification_time"):
+            notification_text = f"рассылка {user['notification_time']}"
+        ban_text = "забанен" if user.get("banned_at") else "активен"
+        lines.append(
+            f"{index}. {identity} | chat_id {user['chat_id']} | "
+            f"{city_text} | {notification_text} | {ban_text}"
+        )
+
+    return "\n".join(lines)
+
+
+def format_banned_users(users: list[dict[str, Any]]) -> str:
+    if not users:
+        return "🚫 Бан-лист пуст."
+
+    lines = ["🚫 Бан-лист:"]
+    for index, user in enumerate(users, start=1):
+        username = user.get("username")
+        display_name = " ".join(
+            part
+            for part in [user.get("first_name"), user.get("last_name")]
+            if part
+        )
+        identity = f"@{username}" if username else (display_name or "без username")
+        reason = user.get("reason") or "без причины"
+        lines.append(
+            f"{index}. {identity} | chat_id {user['chat_id']} | {reason}"
+        )
+
+    return "\n".join(lines)
 
 
 def build_set_time_response(value: str, chat_id: int, db_path: str) -> str:
@@ -741,7 +1244,28 @@ def handle_update(token: str, update: dict[str, Any], db_path: str | None = None
     if not isinstance(chat_id, int):
         return
 
-    send_message(token, chat_id, build_response_text(text, chat_id, db_path))
+    resolved_db_path = db_path or get_database_path()
+    record_user_from_message(message, resolved_db_path)
+
+    user = message.get("from")
+    username = user.get("username") if isinstance(user, dict) else None
+    if is_banned(chat_id, resolved_db_path) and not is_admin(username):
+        send_message(
+            token,
+            chat_id,
+            "⛔ Вы заблокированы и больше не можете пользоваться ботом.",
+            reply_markup=build_main_keyboard(),
+        )
+        return
+
+    pending_action = get_pending_action(chat_id, resolved_db_path)
+    reply_markup = build_reply_markup_for_message(text, username, pending_action)
+    send_message(
+        token,
+        chat_id,
+        build_response_text(text, chat_id, resolved_db_path, username=username),
+        reply_markup=reply_markup,
+    )
 
 
 def run_polling(token: str, db_path: str) -> None:
